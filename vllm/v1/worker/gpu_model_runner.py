@@ -2370,6 +2370,89 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             invalid_req_indices,
         )
 
+    def _debug_print_attn_metadata_stats(self, attn_metadata: PerLayerAttnMetadata) -> None:
+        """
+        调试函数：打印 attention metadata 中的 decode/prefill 统计信息
+        这个函数在 CUDA graph capture 之外调用，所以可以安全打印
+        
+        通过环境变量控制：
+        - VLLM_DEBUG_ATTN_STATS=1  启用打印（默认开启）
+        - VLLM_DEBUG_ATTN_STATS=0  禁用打印
+        
+        只在 rank 0 打印，避免多卡时重复输出
+        """
+        import os
+        import sys
+        
+        # 通过环境变量控制是否打印
+        if not os.environ.get("VLLM_DEBUG_ATTN_STATS", "1") == "1":
+            return
+        
+        # 只在 rank 0 打印
+        if not is_global_first_rank():
+            return
+        
+        # 处理不同类型的 attn_metadata
+        if isinstance(attn_metadata, list):
+            # ubatch 模式：attn_metadata 是列表
+            metadata_sample = next(iter(attn_metadata[0].values())) if attn_metadata[0] else None
+        elif isinstance(attn_metadata, dict):
+            # 普通模式：attn_metadata 是字典
+            metadata_sample = next(iter(attn_metadata.values())) if attn_metadata else None
+        else:
+            metadata_sample = None
+        
+        if metadata_sample is None:
+            print("[DEBUG] attn_metadata 为空", file=sys.stderr, flush=True)
+            return
+        
+        # 尝试获取统计信息（适用于 MLA 和其他支持的 backend）
+        num_decodes = getattr(metadata_sample, 'num_decodes', None)
+        num_prefills = getattr(metadata_sample, 'num_prefills', None)
+        num_decode_tokens = getattr(metadata_sample, 'num_decode_tokens', None)
+        num_actual_tokens = getattr(metadata_sample, 'num_actual_tokens', None)
+        
+        if num_decodes is not None and num_prefills is not None:
+            # MLA 或其他支持分离统计的 backend
+            num_prefill_tokens = num_actual_tokens - num_decode_tokens if num_actual_tokens and num_decode_tokens else 0
+            print(
+                f"[DEBUG] 📊 Batch 统计: "
+                f"🔵 Decode={num_decodes}请求({num_decode_tokens}tokens) | "
+                f"🟢 Prefill={num_prefills}请求({num_prefill_tokens}tokens) | "
+                f"📊 Total={num_actual_tokens}tokens",
+                file=sys.stderr,
+                flush=True
+            )
+        else:
+            # 其他 backend：尝试推断
+            max_query_len = getattr(metadata_sample, 'max_query_len', None)
+            num_reqs = getattr(metadata_sample, 'num_reqs', None)
+            
+            if max_query_len == 1 and num_actual_tokens is not None:
+                # 可能是纯 decode batch
+                print(
+                    f"[DEBUG] 📊 Batch 统计 (推断): "
+                    f"🔵 可能是纯 Decode batch: {num_reqs}请求, {num_actual_tokens}tokens, "
+                    f"max_query_len={max_query_len}",
+                    file=sys.stderr,
+                    flush=True
+                )
+            elif num_actual_tokens is not None:
+                # 混合或 prefill batch
+                print(
+                    f"[DEBUG] 📊 Batch 统计 (推断): "
+                    f"混合或 Prefill batch: {num_reqs}请求, {num_actual_tokens}tokens, "
+                    f"max_query_len={max_query_len}",
+                    file=sys.stderr,
+                    flush=True
+                )
+            else:
+                print(
+                    f"[DEBUG] ⚠️  无法获取统计信息，metadata类型: {type(metadata_sample).__name__}",
+                    file=sys.stderr,
+                    flush=True
+                )
+
     @contextmanager
     def synchronize_input_prep(self):
         if self.prepare_inputs_event is None:
@@ -2455,6 +2538,9 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     use_cascade_attn,
                 ) = self._prepare_inputs(scheduler_output)
 
+            # DEBUG: 打印 decode/prefill 统计信息
+            self._debug_print_attn_metadata_stats(attn_metadata)
+
             dp_rank = self.parallel_config.data_parallel_rank
             if ubatch_slices:
                 assert num_tokens_across_dp is not None
@@ -2503,7 +2589,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 cudagraph_runtime_mode = CUDAGraphMode.NONE
 
         # Run the model.
-        # Use persistent buffers for CUDA graphs.
+        # Use persistent buffers for CUDA graphs.       
         with (
             set_forward_context(
                 attn_metadata,

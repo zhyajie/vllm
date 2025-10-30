@@ -273,6 +273,13 @@ class DefaultModelLoader(BaseModelLoader):
         )
 
     def load_weights(self, model: nn.Module, model_config: ModelConfig) -> None:
+        # 实验模式：跳过权重加载
+        if os.environ.get("VLLM_SKIP_LOAD_WEIGHTS", "0") == "1":
+            logger.warning(
+                "⚠️  跳过权重加载 (VLLM_SKIP_LOAD_WEIGHTS=1)，模型权重未初始化！"
+            )
+            return
+        
         if model_config.quantization == "torchao" and torchao_version_at_least(
             "0.14.0"
         ):

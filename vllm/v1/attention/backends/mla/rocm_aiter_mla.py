@@ -81,9 +81,9 @@ class AiterMLAMetadataBuilder(MLACommonMetadataBuilder[AiterMLAMetadata]):
     # TODO(luka, lucas): audit this as part of:
     #  https://github.com/vllm-project/vllm/issues/22945
     cudagraph_support: ClassVar[AttentionCGSupport] = (
-        AttentionCGSupport.UNIFORM_SINGLE_TOKEN_DECODE
+        AttentionCGSupport.UNIFORM_BATCH
     )
-    query_len_support: ClassVar[QueryLenSupport] = QueryLenSupport.VARLEN
+    query_len_support: ClassVar[QueryLenSupport] = QueryLenSupport.UNIFORM
 
     def __init__(
         self,
@@ -344,7 +344,6 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
         ).fill_(-1)
 
         kv_buffer = kv_c_and_k_pe_cache.unsqueeze(2)
-
         # max_seqlen_qo must be 1 except for MTP
         # TODO: Find the best value for MTP
         aiter_mla_decode_fwd(

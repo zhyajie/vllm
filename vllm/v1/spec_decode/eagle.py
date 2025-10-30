@@ -102,6 +102,10 @@ class EagleProposer:
                 cudagraph_mode.has_mode(CUDAGraphMode.PIECEWISE)
                 and not self.speculative_config.enforce_eager
             )
+            logger.info(f"use_cuda_graph: {self.use_cuda_graph}")
+            logger.info(f"cudagraph_mode: {cudagraph_mode}")
+            logger.info(f"enforce_eager: {self.speculative_config.enforce_eager}")
+            self.use_cuda_graph = False
 
         self.cudagraph_batch_sizes = (
             list(reversed(self.vllm_config.compilation_config.cudagraph_capture_sizes))
@@ -159,6 +163,11 @@ class EagleProposer:
                 )
 
                 rocm_types.append(AiterFlashAttentionMetadata)
+            if find_spec("vllm.v1.attention.backends.mla.rocm_aiter_mla"):
+                from vllm.v1.attention.backends.mla.rocm_aiter_mla import (
+                    AiterMLAMetadata
+                )
+                rocm_types.append(AiterMLAMetadata)
             self.allowed_attn_types = tuple(rocm_types)
 
         # Parse the speculative token tree.
@@ -1050,6 +1059,7 @@ class EagleProposer:
         num_tokens: int,
         use_cudagraphs=True,
     ) -> None:
+        use_cudagraphs = False
         if use_cudagraphs and num_tokens <= self.cudagraph_batch_sizes[-1]:
             num_tokens = self.vllm_config.pad_for_cudagraph(num_tokens)
 

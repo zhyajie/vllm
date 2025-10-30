@@ -1691,6 +1691,15 @@ class MLACommonImpl(MLACommonBaseImpl[M], Generic[M]):
         attn_metadata: MLACommonMetadata,
         k_scale: torch.Tensor,
     ) -> torch.Tensor:
+
+        """
+        # DEBUG: 注空版本，直接返回零张量
+        # 输入 q shape: [Sq, num_heads, qk_head_dim]
+        # 输出 shape: [Sq, num_heads * v_head_dim]
+        batch_size = q.shape[0]
+        output_dim = self.num_heads * self.v_head_dim
+        return torch.zeros(batch_size, output_dim, dtype=q.dtype, device=q.device)
+        """ 
         # TODO (zyongye): Prefill function here
         assert attn_metadata.prefill is not None
         assert self.dcp_world_size is not None
