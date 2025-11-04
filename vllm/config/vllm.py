@@ -647,6 +647,56 @@ class VllmConfig:
             if size % self.parallel_config.tensor_parallel_size == 0
         ]
 
+    def update_sizes_for_uniform_decode(self, possible_sizes: list) -> list:
+        """
+        Filter out capture sizes that are not divisible by uniform_decode_query_len
+        to prevent prefill branches in uniform decode CUDA graphs.
+        
+        Example:
+            If uniform_decode_query_len=3 (MTP=2), default capture sizes
+            [1, 2, 4, 8, 16, 24, 32, 40, 48, ...] would be filtered to [24, 48, ...]
+            (only keeping sizes divisible by 3). This ensures that when capturing
+            uniform decode graphs, all requests have consistent query_len, preventing
+            prefill branch contamination.
+        
+        Args:
+            possible_sizes: List of candidate CUDA graph capture sizes.
+            
+        Returns:
+            Filtered list of sizes that are multiples of uniform_decode_query_len.
+        """
+        # Calculate uniform_decode_query_len
+        uniform_decode_query_len = (
+            1
+            if not self.speculative_config
+            else 1 + self.speculative_config.num_speculative_tokens
+        )
+        
+        # Only filter if uniform_decode_query_len > 1
+        if uniform_decode_query_len > 1:
+            removed_sizes = [
+                size
+                for size in possible_sizes
+                if size % uniform_decode_query_len != 0
+            ]
+            if removed_sizes:
+                logger.warning(
+                    "Batch sizes %s are removed because they are not "
+                    "multiple of uniform_decode_query_len %d when "
+                    "capturing uniform decode CUDA graphs",
+                    removed_sizes,
+                    uniform_decode_query_len,
+                )
+            
+            return [
+                size
+                for size in possible_sizes
+                if size % uniform_decode_query_len == 0
+            ]
+        
+        # If uniform_decode_query_len == 1, all sizes are divisible by 1, no filtering needed
+        return possible_sizes
+
     def _set_cudagraph_sizes(self):
         """
         vLLM defines the default candidate list of batch sizes for CUDA graph
@@ -708,6 +758,12 @@ class VllmConfig:
                 batch_size_capture_list = self.update_sizes_for_sequence_parallelism(
                     batch_size_capture_list
                 )
+            
+            # Filter out sizes that are not divisible by uniform_decode_query_len
+            batch_size_capture_list = self.update_sizes_for_uniform_decode(
+                batch_size_capture_list
+            )
+            
             max_num_tokens = self.scheduler_config.max_num_batched_tokens
             batch_size_capture_list = [
                 size for size in batch_size_capture_list if size <= max_num_tokens

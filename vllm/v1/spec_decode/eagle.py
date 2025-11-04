@@ -159,6 +159,13 @@ class EagleProposer:
                 )
 
                 rocm_types.append(AiterFlashAttentionMetadata)
+            # vllm.v1.attention.backends.mla.rocm_aiter_mla is an optional backend
+            if find_spec("vllm.v1.attention.backends.mla.rocm_aiter_mla"):
+                from vllm.v1.attention.backends.mla.rocm_aiter_mla import (
+                    AiterMLAMetadata,
+                )
+
+                rocm_types.append(AiterMLAMetadata)
             self.allowed_attn_types = tuple(rocm_types)
 
         # Parse the speculative token tree.
