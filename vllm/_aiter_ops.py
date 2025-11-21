@@ -326,6 +326,62 @@ def _rocm_aiter_mla_decode_fwd_fake(
     pass
 
 
+def _rocm_aiter_mla_decode_fwd_grouped_impl(
+    q: torch.Tensor,
+    k_buffer: torch.Tensor,
+    v_buffer: torch.Tensor,
+    o: torch.Tensor,
+    kv_indptr: torch.Tensor,
+    kv_indices: torch.Tensor,
+    block_tables: torch.Tensor,
+    kv_lora_rank: int,
+    attn_logits: torch.Tensor,
+    attn_lse: torch.Tensor,
+    num_kv_splits: int,
+    sm_scale: float,
+    logit_cap: float = 0.0,
+    mtp: int = 0,
+) -> None:
+    from aiter.ops.triton.mla_decode_dispatch import decode_attention_fwd_grouped
+
+    decode_attention_fwd_grouped(
+        q=q,
+        k_buffer=k_buffer,
+        v_buffer=v_buffer,
+        o=o,
+        kv_indptr=kv_indptr,
+        kv_indices=kv_indices,
+        block_tables=block_tables,
+        kv_lora_rank=kv_lora_rank,
+        attn_logits=attn_logits,
+        attn_lse=attn_lse,
+        num_kv_splits=num_kv_splits,
+        sm_scale=sm_scale,
+        logit_cap=logit_cap,
+        mtp=mtp,
+        config=None,
+    )
+
+
+def _rocm_aiter_mla_decode_fwd_grouped_fake(
+    q: torch.Tensor,
+    k_buffer: torch.Tensor,
+    v_buffer: torch.Tensor,
+    o: torch.Tensor,
+    kv_indptr: torch.Tensor,
+    kv_indices: torch.Tensor,
+    block_tables: torch.Tensor,
+    kv_lora_rank: int,
+    attn_logits: torch.Tensor,
+    attn_lse: torch.Tensor,
+    num_kv_splits: int,
+    sm_scale: float,
+    logit_cap: float = 0.0,
+    mtp: int = 0,
+) -> None:
+    pass
+
+
 def _rocm_aiter_gemm_a8w8_impl(
     A: torch.Tensor,
     B: torch.Tensor,
@@ -599,6 +655,14 @@ class rocm_aiter_ops:
             )
 
             direct_register_custom_op(
+                op_name="rocm_aiter_mla_decode_fwd_grouped",
+                op_func=_rocm_aiter_mla_decode_fwd_grouped_impl,
+                mutates_args=["o", "attn_logits", "attn_lse"],
+                fake_impl=_rocm_aiter_mla_decode_fwd_grouped_fake,
+                tags=tags,
+            )
+
+            direct_register_custom_op(
                 op_name="rocm_aiter_gemm_a8w8",
                 op_func=_rocm_aiter_gemm_a8w8_impl,
                 mutates_args=[],
@@ -818,6 +882,40 @@ class rocm_aiter_ops:
             kv_last_page_lens,
             sm_scale=sm_scale,
             logit_cap=logit_cap,
+        )
+
+    @staticmethod
+    def mla_decode_fwd_grouped(
+        q: torch.Tensor,
+        k_buffer: torch.Tensor,
+        v_buffer: torch.Tensor,
+        o: torch.Tensor,
+        kv_indptr: torch.Tensor,
+        kv_indices: torch.Tensor,
+        block_tables: torch.Tensor,
+        kv_lora_rank: int,
+        attn_logits: torch.Tensor,
+        attn_lse: torch.Tensor,
+        num_kv_splits: int,
+        sm_scale: float,
+        logit_cap: float = 0.0,
+        mtp: int = 0,
+    ):
+        torch.ops.vllm.rocm_aiter_mla_decode_fwd_grouped(
+            q,
+            k_buffer,
+            v_buffer,
+            o,
+            kv_indptr,
+            kv_indices,
+            block_tables,
+            kv_lora_rank,
+            attn_logits,
+            attn_lse,
+            num_kv_splits,
+            sm_scale,
+            logit_cap,
+            mtp,
         )
 
     @staticmethod

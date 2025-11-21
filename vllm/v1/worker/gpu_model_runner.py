@@ -4825,6 +4825,24 @@ class GPUModelRunner(
                     )
                     kernel_num_blocks = num_blocks * num_blocks_per_kv_block
 
+                    # 只在 rank 0 打印 backend 和参数信息
+                    if is_global_first_rank():
+                        print("=" * 80)
+                        print(f"KV Cache Shape 计算 - Layer: {layer_name}")
+                        print("=" * 80)
+                        print(f"Attention Backend: {attn_backend.__class__.__name__}")
+                        print(f"Backend Type: {type(attn_backend)}")
+                        print(f"\n输入参数:")
+                        print(f"  kernel_num_blocks: {kernel_num_blocks}")
+                        print(f"  kernel_block_size: {kernel_block_size}")
+                        print(f"  kv_cache_spec.num_kv_heads: {kv_cache_spec.num_kv_heads}")
+                        print(f"  kv_cache_spec.head_size: {kv_cache_spec.head_size}")
+                        print(f"  cache_dtype_str: {self.cache_config.cache_dtype}")
+                        print(f"\n其他信息:")
+                        print(f"  num_blocks: {num_blocks}")
+                        print(f"  num_blocks_per_kv_block: {num_blocks_per_kv_block}")
+                        print(f"  kv_cache_spec.block_size: {kv_cache_spec.block_size}")
+                    
                     kv_cache_shape = attn_backend.get_kv_cache_shape(
                         kernel_num_blocks,
                         kernel_block_size,
@@ -4832,6 +4850,10 @@ class GPUModelRunner(
                         kv_cache_spec.head_size,
                         cache_dtype_str=self.cache_config.cache_dtype,
                     )
+                    
+                    if is_global_first_rank():
+                        print(f"\n返回的 kv_cache_shape: {kv_cache_shape}")
+                        print("=" * 80)
                     dtype = kv_cache_spec.dtype
                     try:
                         kv_cache_stride_order = attn_backend.get_kv_cache_stride_order()
@@ -4932,10 +4954,21 @@ class GPUModelRunner(
         """
         # Initialize the memory buffer for KV cache
         kv_cache_raw_tensors = self._allocate_kv_cache_tensors(kv_cache_config)
+
+        logger.info(f"=== kv_cache_raw_tensors shape debug ===")
+        for layer_name, kv_cache_raw_tensor in kv_cache_raw_tensors.items():
+            logger.info(f"{layer_name}: {kv_cache_raw_tensor.shape}, dtype: {kv_cache_raw_tensor.dtype}")
+        logger.info(f"=== kernel_block_sizes shape debug ===")
+        logger.info(f"kernel_block_sizes: {kernel_block_sizes}")
+        logger.info(f"=== kv_cache_config shape debug ===")
+        logger.info(f"kv_cache_config: {kv_cache_config}")  
         # Change the memory buffer to the desired shape
         kv_caches = self._reshape_kv_cache_tensors(
             kv_cache_config, kv_cache_raw_tensors, kernel_block_sizes
         )
+        logger.info(f"=== kv_caches shape debug ===")
+        for layer_name, kv_cache in kv_caches.items():
+            logger.info(f"{layer_name}: {kv_cache.shape}, dtype: {kv_cache.dtype}")
 
         # Set up cross-layer KV cache sharing
         for layer_name, target_layer_name in self.shared_kv_cache_layers.items():
@@ -4951,6 +4984,10 @@ class GPUModelRunner(
             self.kv_caches,
             num_attn_module,
         )
+
+        logger.info(f"=== kv_caches shape debug after bind_kv_cache ===")
+        for layer_name, kv_cache in kv_caches.items():
+            logger.info(f"{layer_name}: {kv_cache.shape}, dtype: {kv_cache.dtype}")
         return kv_caches
 
     def maybe_add_kv_sharing_layers_to_kv_cache_groups(

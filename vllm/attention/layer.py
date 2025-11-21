@@ -901,6 +901,8 @@ def get_attention_context(
         attn_metadata = attn_metadata[layer_name]
     attn_layer: Attention | MLAAttention = forward_context.no_compile_layers[layer_name]
     kv_cache = attn_layer.kv_cache[forward_context.virtual_engine]
+    logger.info(f"=== kv_cache shape debug ===")
+    logger.info(f"kv_cache.shape: {kv_cache.shape}, dtype: {kv_cache.dtype}")
     return attn_metadata, attn_layer, kv_cache
 
 
