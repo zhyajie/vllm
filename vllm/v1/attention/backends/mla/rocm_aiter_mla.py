@@ -110,29 +110,12 @@ class AiterMLAMetadataBuilder(MLACommonMetadataBuilder[AiterMLAMetadata]):
         # kernel block size is always 1, although the kv block size is not 1.
         device = self.device
         num_reqs = seq_lens_device.size(0)
-        if parallel_state.get_world_group().is_first_rank:
-            print(f"=== seq_lens_device shape debug ===")
-            print(f"seq_lens_device.shape: {seq_lens_device.shape}, dtype: {seq_lens_device.dtype}")
-            print(f"seq_lens_device: {seq_lens_device}")
-
-            print(f"=== block_table_tensor shape debug ===")
-            print(f"block_table_tensor.shape: {block_table_tensor.shape}, dtype: {block_table_tensor.dtype}")
-            print(f"block_table_tensor: {block_table_tensor}")  
  
-
         mask = torch.arange(
             block_table_tensor.size(1), dtype=block_table_tensor.dtype, device=device
         ).unsqueeze(0) < seq_lens_device.unsqueeze(1)
-        if parallel_state.get_world_group().is_first_rank:
-            print(f"=== mask shape debug ===")
-            print(f"mask.shape: {mask.shape}, dtype: {mask.dtype}")
-            print(f"mask: {mask}") 
             
         paged_kv_indices = block_table_tensor[mask]
-        if parallel_state.get_world_group().is_first_rank:
-            print(f"=== paged_kv_indices shape debug ===")
-            print(f"paged_kv_indices.shape: {paged_kv_indices.shape}, dtype: {paged_kv_indices.dtype}")
-            print(f"paged_kv_indices: {paged_kv_indices}")
         paged_kv_last_page_len = torch.where(seq_lens_device == 0, 1, seq_lens_device)
 
         paged_kv_indptr = torch.cat(
@@ -264,12 +247,6 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
         # TODO: Find the best value for MTP
         max_seqlen_qo = 1
         
-        if parallel_state.get_world_group().is_first_rank:
-            print(f"=== kv_cache shape debug ===")
-            print(f"Original kv_c_and_k_pe_cache.shape: {kv_c_and_k_pe_cache.shape}")
-            print(f"num_heads: {self.num_heads}")
-            print(f"kv_lora_rank: {self.kv_lora_rank}")
-        
         # For num_heads == 8, use decode_attention_fwd_grouped interface
         if self.num_heads == 8:
             # MLA KV cache shape: [num_blocks, block_size, head_size]
@@ -305,11 +282,7 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
             # Reshape q to [batch, num_heads, head_size]
             q_reshaped = q.view(B, self.num_heads, -1)
             from aiter import dtypes
-
-            q_fp8 = q_reshaped.to(dtypes.fp8)
-            k_fp8 = kv_buffer.to(dtypes.fp8)
-
-            
+       
             # 只在 rank 0 打印调试信息
             if parallel_state.get_world_group().is_first_rank:
                 print("=" * 80)
@@ -317,8 +290,8 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
                 print("=" * 80)
                 print(f"After reshape - kv_buffer.shape: {kv_buffer.shape}")
                 print(f"  num_blocks: {num_blocks}, block_size: {block_size}, head_size: {head_size}")
-                print(f"q_fp8.shape: {q_fp8.shape}, dtype: {q_fp8.dtype}")
-                print(f"k_fp8.shape: {k_fp8.shape}, dtype: {k_fp8.dtype}")
+                print(f"q_reshaped.shape: {q_reshaped.shape}, dtype: {q_reshaped.dtype}")
+                print(f"kv_buffer.shape: {kv_buffer.shape}, dtype: {kv_buffer.dtype}")
     
                 print(f"o.shape: {o.shape}, dtype: {o.dtype}")
                 
@@ -331,16 +304,8 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
                     print(f"kv_indptr values (first 10): {kv_indptr[:10]}")
                     print(f"kv_indptr values (last 10): {kv_indptr[-10:]}")
                 
-                # kv_indices - 打印 shape, dtype 和值
-                kv_indices = attn_metadata.decode.paged_kv_indices
-                print(f"\nkv_indices.shape: {kv_indices.shape}, dtype: {kv_indices.dtype}")
-                if kv_indices.numel() <= 100:
-                    print(f"kv_indices values: {kv_indices}")
-                else:
-                    print(f"kv_indices values (first 20): {kv_indices[:20]}")
-                    print(f"kv_indices values (last 20): {kv_indices[-20:]}")
-                
                 print(f"\nblock_tables.shape: {attn_metadata.decode.block_table.shape}, dtype: {attn_metadata.decode.block_table.dtype}")
+                print(f"block_tables[0, :10]: {attn_metadata.decode.block_table[0, :10]}")
                 print(f"attn_logits.shape: {attn_logits.shape}, dtype: {attn_logits.dtype}")
                 print(f"attn_lse.shape: {attn_lse.shape}, dtype: {attn_lse.dtype}")
                 print(f"\nkv_lora_rank: {self.kv_lora_rank}")
@@ -352,12 +317,11 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
                 print(f"num_heads: {self.num_heads}")
                 print("=" * 80)
             rocm_aiter_ops.mla_decode_fwd_grouped(
-                q=q_fp8,
-                k_buffer=k_fp8,
-                v_buffer=k_fp8,
+                q=q_reshaped,
+                k_buffer=kv_buffer,
+                v_buffer=kv_buffer,
                 o=o,
                 kv_indptr=attn_metadata.decode.paged_kv_indptr,
-                kv_indices=attn_metadata.decode.paged_kv_indices,
                 block_tables=attn_metadata.decode.block_table,
                 kv_lora_rank=self.kv_lora_rank,
                 attn_logits=attn_logits,
@@ -368,8 +332,6 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
                 mtp=max_seqlen_qo - 1,
             )
             torch.cuda.synchronize()
-            if parallel_state.get_world_group().is_first_rank:
-                print(f"mla_decode_fwd_grouped output: {o}")
         else:
             # For num_heads == 16 or 128, use the original mla_decode_fwd
             kv_buffer = kv_c_and_k_pe_cache.unsqueeze(2)
