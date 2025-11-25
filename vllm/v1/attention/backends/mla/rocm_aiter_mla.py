@@ -283,39 +283,37 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
             q_reshaped = q.view(B, self.num_heads, -1)
             from aiter import dtypes
        
-            # 只在 rank 0 打印调试信息
-            if parallel_state.get_world_group().is_first_rank:
-                print("=" * 80, flush=True)
-                print("mla_decode_fwd_grouped 参数信息:", flush=True)
-                print("=" * 80, flush=True)
-                print(f"After reshape - kv_buffer.shape: {kv_buffer.shape}", flush=True)
-                print(f"  num_blocks: {num_blocks}, block_size: {block_size}, head_size: {head_size}", flush=True)
-                print(f"q_reshaped.shape: {q_reshaped.shape}, dtype: {q_reshaped.dtype}", flush=True)
-                print(f"kv_buffer.shape: {kv_buffer.shape}, dtype: {kv_buffer.dtype}", flush=True)
-    
-                print(f"o.shape: {o.shape}, dtype: {o.dtype}", flush=True)
-                
-                # kv_indptr - 打印 shape, dtype 和值
-                kv_indptr = attn_metadata.decode.paged_kv_indptr
-                print(f"\nkv_indptr.shape: {kv_indptr.shape}, dtype: {kv_indptr.dtype}", flush=True)
-                if kv_indptr.numel() <= 100:
-                    print(f"kv_indptr values: {kv_indptr}", flush=True)
-                else:
-                    print(f"kv_indptr values (first 10): {kv_indptr[:10]}", flush=True)
-                    print(f"kv_indptr values (last 10): {kv_indptr[-10:]}", flush=True)
-                
-                print(f"\nblock_tables.shape: {attn_metadata.decode.block_table.shape}, dtype: {attn_metadata.decode.block_table.dtype}", flush=True)
-                print(f"block_tables[0, :10]: {attn_metadata.decode.block_table[0, :10]}", flush=True)
-                print(f"attn_logits.shape: {attn_logits.shape}, dtype: {attn_logits.dtype}", flush=True)
-                print(f"attn_lse.shape: {attn_lse.shape}, dtype: {attn_lse.dtype}", flush=True)
-                print(f"\nkv_lora_rank: {self.kv_lora_rank}", flush=True)
-                print(f"num_kv_splits: {num_kv_splits}", flush=True)
-                print(f"sm_scale: {self.scale}", flush=True)
-                print(f"logit_cap: 0.0", flush=True)
-                print(f"mtp: {max_seqlen_qo - 1}", flush=True)
-                print(f"\nBatch size (B): {B}", flush=True)
-                print(f"num_heads: {self.num_heads}", flush=True)
-                print("=" * 80, flush=True)
+            print("=" * 80, flush=True)
+            print("mla_decode_fwd_grouped 参数信息:", flush=True)
+            print("=" * 80, flush=True)
+            print(f"After reshape - kv_buffer.shape: {kv_buffer.shape}", flush=True)
+            print(f"  num_blocks: {num_blocks}, block_size: {block_size}, head_size: {head_size}", flush=True)
+            print(f"q_reshaped.shape: {q_reshaped.shape}, dtype: {q_reshaped.dtype}", flush=True)
+            print(f"kv_buffer.shape: {kv_buffer.shape}, dtype: {kv_buffer.dtype}", flush=True)
+
+            print(f"o.shape: {o.shape}, dtype: {o.dtype}", flush=True)
+            
+            # kv_indptr - 打印 shape, dtype 和值
+            kv_indptr = attn_metadata.decode.paged_kv_indptr
+            print(f"\nkv_indptr.shape: {kv_indptr.shape}, dtype: {kv_indptr.dtype}", flush=True)
+            if kv_indptr.numel() <= 100:
+                print(f"kv_indptr values: {kv_indptr}", flush=True)
+            else:
+                print(f"kv_indptr values (first 10): {kv_indptr[:10]}", flush=True)
+                print(f"kv_indptr values (last 10): {kv_indptr[-10:]}", flush=True)
+            
+            print(f"\nblock_tables.shape: {attn_metadata.decode.block_table.shape}, dtype: {attn_metadata.decode.block_table.dtype}", flush=True)
+            print(f"block_tables[0, :10]: {attn_metadata.decode.block_table[0, :10]}", flush=True)
+            print(f"attn_logits.shape: {attn_logits.shape}, dtype: {attn_logits.dtype}", flush=True)
+            print(f"attn_lse.shape: {attn_lse.shape}, dtype: {attn_lse.dtype}", flush=True)
+            print(f"\nkv_lora_rank: {self.kv_lora_rank}", flush=True)
+            print(f"num_kv_splits: {num_kv_splits}", flush=True)
+            print(f"sm_scale: {self.scale}", flush=True)
+            print(f"logit_cap: 0.0", flush=True)
+            print(f"mtp: {max_seqlen_qo - 1}", flush=True)
+            print(f"\nBatch size (B): {B}", flush=True)
+            print(f"num_heads: {self.num_heads}", flush=True)
+            print("=" * 80, flush=True)
             rocm_aiter_ops.mla_decode_fwd_grouped(
                 q=q_reshaped,
                 k_buffer=kv_buffer,
