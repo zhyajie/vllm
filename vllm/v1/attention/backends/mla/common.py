@@ -1924,7 +1924,6 @@ class MLACommonImpl(MLACommonBaseImpl[M], Generic[M]):
         prefill_k_pe = k_pe[num_decode_tokens:]
         prefill_k_c_normed = k_c_normed[num_decode_tokens:]
 
-        print(f"kv_cache.shape: {kv_cache.shape}, dtype: {kv_cache.dtype}")
         # write the latent and rope to kv cache
         if kv_cache.numel() > 0:
             ops.concat_and_cache_mla(

@@ -345,13 +345,7 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
     use_torch_ref = os.environ.get('VLLM_MLA_USE_TORCH_REF', '0') == '1'
     
     if use_torch_ref:
-        # Use PyTorch reference implementation (torch_mla_extend)
-        print(f"[MLA Debug] Using PyTorch reference implementation (torch_mla_extend)", flush=True)
-        print(f"[MLA Debug] k_buffer.shape: {k_buffer.shape}", flush=True)
-        print(f"[MLA Debug] kv_indptr: {kv_indptr}", flush=True)
-        print(f"[MLA Debug] block_tables.shape: {block_tables.shape}", flush=True)
-        
-        # Import the reference function
+
         import sys
         sys.path.insert(0, '/home/yajizhan/code/aiter/op_tests/op_benchmarks/triton')
         try:
@@ -402,14 +396,6 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
                 kv_indices_list.append(expanded_indices[:seq_len_i])
         
         kv_indices = torch.cat(kv_indices_list)
-        
-        print(f"[MLA Debug] Built kv_indices, length: {kv_indices.shape[0]}", flush=True)
-        if kv_indices.shape[0] <= 20:
-            print(f"[MLA Debug] kv_indices: {kv_indices}", flush=True)
-        else:
-            print(f"[MLA Debug] kv_indices (first 10): {kv_indices[:10]}", flush=True)
-            print(f"[MLA Debug] kv_indices (last 10): {kv_indices[-10:]}", flush=True)
-        
         # Call torch_mla_extend
         # Note: is_causal=False for decode (single query token attending to all KV)
         o_ref, lse_ref = torch_mla_extend(
@@ -427,8 +413,7 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
         
         # Copy results
         o.copy_(o_ref)
-        
-        print(f"[MLA Debug] PyTorch reference completed", flush=True)
+
     else:
         # Use Triton/ROCm implementation
         from aiter.ops.triton.mla_decode_dispatch import decode_attention_fwd_grouped
