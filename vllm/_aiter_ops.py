@@ -341,25 +341,125 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
     logit_cap: float = 0.0,
     mtp: int = 0,
 ) -> None:
-    from aiter.ops.triton.mla_decode_dispatch import decode_attention_fwd_grouped
+    import os
+    use_torch_ref = os.environ.get('VLLM_MLA_USE_TORCH_REF', '0') == '1'
+    
+    if use_torch_ref:
+        # Use PyTorch reference implementation (torch_mla_extend)
+        print(f"[MLA Debug] Using PyTorch reference implementation (torch_mla_extend)", flush=True)
+        print(f"[MLA Debug] k_buffer.shape: {k_buffer.shape}", flush=True)
+        print(f"[MLA Debug] kv_indptr: {kv_indptr}", flush=True)
+        print(f"[MLA Debug] block_tables.shape: {block_tables.shape}", flush=True)
+        
+        # Import the reference function
+        import sys
+        sys.path.insert(0, '/home/yajizhan/code/aiter/op_tests/op_benchmarks/triton')
+        try:
+            from bench_mla_decode_without_rope import torch_mla_extend
+        except ImportError:
+            print("[MLA Debug] Failed to import torch_mla_extend, falling back to Triton", flush=True)
+            use_torch_ref = False
+    
+    if use_torch_ref:
+        # Prepare inputs for torch_mla_extend
+        batch_size = q.shape[0]
+        num_heads = q.shape[1]
+        head_dim = q.shape[2]
+        qk_rope_head_dim = head_dim - kv_lora_rank
+        dtype = q.dtype
+        
+        # Create qo_indptr: [0, 1, 2, ..., batch_size]
+        qo_indptr = torch.arange(0, batch_size + 1, dtype=torch.int32, device=q.device)
+        
+        # Build kv_indices from block_tables
+        # Note: kv_indptr stores token counts, not block counts
+        # We need to convert: num_tokens -> num_blocks
+        num_blocks_total, block_size_actual, num_kv_heads_actual, _ = k_buffer.shape
+        
+        kv_indices_list = []
+        for i in range(batch_size):
+            seq_len_i = (kv_indptr[i + 1] - kv_indptr[i]).item()  # Number of tokens
+            num_blocks_i = (seq_len_i + block_size_actual - 1) // block_size_actual  # Number of blocks
+            
+            # Get block IDs from block_tables
+            block_ids = block_tables[i, :num_blocks_i]
+            
+            # Expand blocks to token-level indices
+            # For block_size=1: block_ids directly correspond to token positions
+            # For block_size>1: need to expand each block to its token positions
+            if block_size_actual == 1:
+                # Direct mapping: block index = token index
+                kv_indices_list.append(block_ids)
+            else:
+                # Expand each block to token positions
+                token_indices = []
+                for block_id in block_ids:
+                    block_start = block_id * block_size_actual
+                    block_end = block_start + block_size_actual
+                    token_indices.append(torch.arange(block_start, block_end, dtype=torch.int32, device=q.device))
+                expanded_indices = torch.cat(token_indices)
+                # Only take the first seq_len_i tokens (last block may be partial)
+                kv_indices_list.append(expanded_indices[:seq_len_i])
+        
+        kv_indices = torch.cat(kv_indices_list)
+        
+        print(f"[MLA Debug] Built kv_indices, length: {kv_indices.shape[0]}", flush=True)
+        if kv_indices.shape[0] <= 20:
+            print(f"[MLA Debug] kv_indices: {kv_indices}", flush=True)
+        else:
+            print(f"[MLA Debug] kv_indices (first 10): {kv_indices[:10]}", flush=True)
+            print(f"[MLA Debug] kv_indices (last 10): {kv_indices[-10:]}", flush=True)
+        
+        # Call torch_mla_extend
+        # Note: is_causal=False for decode (single query token attending to all KV)
+        o_ref, lse_ref = torch_mla_extend(
+            q=q,  # [batch, num_heads, head_dim]
+            kvc_cache=k_buffer.reshape(-1, 1, 576),  # [num_blocks * block_size, num_kv_heads, head_dim]
+            qo_indptr=qo_indptr,
+            kv_indptr=kv_indptr,
+            kv_indices=kv_indices,
+            sm_scale=sm_scale,
+            kv_lora_rank=kv_lora_rank,
+            qk_rope_head_dim=qk_rope_head_dim,
+            dtype=torch.bfloat16,
+            is_causal=False,  # Decode: 1 query token can attend to all KV tokens
+        )
+        
+        # Copy results
+        o.copy_(o_ref)
+        
+        # Copy LSE to attn_lse
+        # attn_lse shape: [batch, num_kv_splits, num_heads, 1]
+        # lse_ref shape: [num_heads, batch] from torch_mla_extend
+        if attn_lse.numel() > 0:
+            # Reshape lse_ref to match attn_lse format
+            # lse_ref is [num_heads, batch], need to transpose and add dimensions
+            lse_reshaped = lse_ref.transpose(0, 1).unsqueeze(1).unsqueeze(-1)  # [batch, 1, num_heads, 1]
+            attn_lse[:, 0, :, :].copy_(lse_reshaped[:, 0, :, :])
+        
+        print(f"[MLA Debug] PyTorch reference completed", flush=True)
+    else:
+        # Use Triton/ROCm implementation
+        from aiter.ops.triton.mla_decode_dispatch import decode_attention_fwd_grouped
 
-    decode_attention_fwd_grouped(
-        q=q,
-        k_buffer=k_buffer,
-        v_buffer=v_buffer,
-        o=o,
-        kv_indptr=kv_indptr,
-        kv_indices=None,
-        block_tables=block_tables,
-        kv_lora_rank=kv_lora_rank,
-        attn_logits=attn_logits,
-        attn_lse=attn_lse,
-        num_kv_splits=num_kv_splits,
-        sm_scale=sm_scale,
-        logit_cap=logit_cap,
-        mtp=mtp,
-        config=None,
-    )
+        decode_attention_fwd_grouped(
+            q=q,
+            k_buffer=k_buffer,
+            v_buffer=v_buffer,
+            o=o,
+            kv_indptr=kv_indptr,
+            kv_indices=None,
+            block_tables=block_tables,
+            kv_lora_rank=kv_lora_rank,
+            attn_logits=attn_logits,
+            attn_lse=attn_lse,
+            num_kv_splits=num_kv_splits,
+            sm_scale=sm_scale,
+            logit_cap=logit_cap,
+            mtp=mtp,
+            config=None,
+        )
+    
 
 
 def _rocm_aiter_mla_decode_fwd_grouped_fake(

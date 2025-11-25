@@ -282,36 +282,8 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
             # Reshape q to [batch, num_heads, head_size]
             q_reshaped = q.view(B, self.num_heads, -1)
             from aiter import dtypes
-            
-            # Save tensors when kv_indptr is [0, 8] for debugging
-            kv_indptr = attn_metadata.decode.paged_kv_indptr
-            if (parallel_state.get_world_group().is_first_rank and 
-                kv_indptr.numel() == 2 and 
-                kv_indptr[0].item() == 0 and 
-                kv_indptr[1].item() == 8):
-                import os
-                save_dir = "/tmp/mla_decode_debug"
-                os.makedirs(save_dir, exist_ok=True)
-                print(f"\n!!! Detected kv_indptr=[0, 8], saving tensors to {save_dir} !!!", flush=True)
-                
-                torch.save({
-                    'q': q_reshaped.cpu(),
-                    'k_buffer': kv_buffer.cpu(),
-                    'o': o.cpu(),
-                    'kv_indptr': attn_metadata.decode.paged_kv_indptr.cpu(),
-                    'block_tables': attn_metadata.decode.block_table.cpu(),
-                    'kv_lora_rank': self.kv_lora_rank,
-                    'attn_logits': attn_logits.cpu(),
-                    'attn_lse': attn_lse.cpu(),
-                    'num_kv_splits': num_kv_splits,
-                    'sm_scale': self.scale,
-                    'logit_cap': 0.0,
-                    'mtp': max_seqlen_qo - 1,
-                    'num_heads': self.num_heads,
-                    'batch_size': B,
-                }, os.path.join(save_dir, 'mla_decode_inputs.pt'))
-                print(f"Tensors saved successfully!", flush=True)
-            
+
+            torch.cuda.synchronize()
             rocm_aiter_ops.mla_decode_fwd_grouped(
                 q=q_reshaped,
                 k_buffer=kv_buffer,
