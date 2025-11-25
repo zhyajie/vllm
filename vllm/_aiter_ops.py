@@ -428,15 +428,6 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
         # Copy results
         o.copy_(o_ref)
         
-        # Copy LSE to attn_lse
-        # attn_lse shape: [batch, num_kv_splits, num_heads, 1]
-        # lse_ref shape: [num_heads, batch] from torch_mla_extend
-        if attn_lse.numel() > 0:
-            # Reshape lse_ref to match attn_lse format
-            # lse_ref is [num_heads, batch], need to transpose and add dimensions
-            lse_reshaped = lse_ref.transpose(0, 1).unsqueeze(1).unsqueeze(-1)  # [batch, 1, num_heads, 1]
-            attn_lse[:, 0, :, :].copy_(lse_reshaped[:, 0, :, :])
-        
         print(f"[MLA Debug] PyTorch reference completed", flush=True)
     else:
         # Use Triton/ROCm implementation

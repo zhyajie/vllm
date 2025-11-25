@@ -292,7 +292,6 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
                 kv_indptr.numel() >= 2 and 
                 kv_indptr[1].item() == 8):
                 
-                from vllm import parallel_state
                 import time
                 
                 rank = parallel_state.get_world_group().rank

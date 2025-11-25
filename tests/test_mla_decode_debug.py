@@ -52,11 +52,8 @@ def test_mla_decode_fwd_grouped_with_saved_tensors():
     print("=" * 80)
     print(f"q.shape: {q.shape}, dtype: {q.dtype}")
     print(f"k_buffer.shape: {k_buffer.shape}, dtype: {k_buffer.dtype}")
-    print(f"v_buffer.shape: {v_buffer.shape}, dtype: {v_buffer.dtype}")
     print(f"o.shape: {o.shape}, dtype: {o.dtype}")
     print(f"kv_indptr: {kv_indptr}")
-    print(f"kv_indices.shape: {kv_indices.shape}")
-    print(f"kv_indices: {kv_indices}")
     print(f"block_tables.shape: {block_tables.shape}")
     print(f"block_tables[0, :10]: {block_tables[0, :10]}")
     print(f"attn_logits.shape: {attn_logits.shape}")
@@ -73,7 +70,7 @@ def test_mla_decode_fwd_grouped_with_saved_tensors():
     
     # Import the operator
     try:
-        from vllm import _rocm_aiter_ops as rocm_aiter_ops
+        from vllm._aiter_ops import rocm_aiter_ops
     except ImportError:
         pytest.skip("rocm_aiter_ops not available")
     
@@ -83,10 +80,9 @@ def test_mla_decode_fwd_grouped_with_saved_tensors():
         rocm_aiter_ops.mla_decode_fwd_grouped(
             q=q,
             k_buffer=k_buffer,
-            v_buffer=v_buffer,
+            v_buffer=k_buffer,
             o=o,
             kv_indptr=kv_indptr,
-            kv_indices=kv_indices,
             block_tables=block_tables,
             kv_lora_rank=kv_lora_rank,
             attn_logits=attn_logits,
@@ -107,55 +103,9 @@ def test_mla_decode_fwd_grouped_with_saved_tensors():
         raise
 
 
-def test_analyze_kv_indices():
-    """Analyze the kv_indices to understand the pattern."""
-    
-    save_path = "/tmp/mla_decode_debug/mla_decode_inputs.pt"
-    
-    if not os.path.exists(save_path):
-        pytest.skip(f"Saved tensors not found at {save_path}")
-    
-    print(f"Loading tensors from {save_path}")
-    data = torch.load(save_path)
-    
-    kv_indptr = data['kv_indptr']
-    kv_indices = data['kv_indices']
-    block_tables = data['block_tables']
-    
-    print("\n" + "=" * 80)
-    print("Analyzing kv_indices pattern:")
-    print("=" * 80)
-    print(f"kv_indptr: {kv_indptr}")
-    print(f"kv_indices.shape: {kv_indices.shape}")
-    print(f"kv_indices: {kv_indices}")
-    print(f"\nblock_tables.shape: {block_tables.shape}")
-    print(f"block_tables[0]: {block_tables[0]}")
-    
-    # Analyze
-    num_indices = kv_indptr[1] - kv_indptr[0]
-    print(f"\nNumber of indices for request 0: {num_indices}")
-    print(f"Unique values in kv_indices: {torch.unique(kv_indices)}")
-    print(f"Value counts:")
-    for val in torch.unique(kv_indices):
-        count = (kv_indices == val).sum()
-        print(f"  {val}: {count} occurrences")
-    
-    # Check for issues
-    if (kv_indices == 0).sum() > 1:
-        print("\n⚠ WARNING: Multiple indices pointing to block 0!")
-    
-    print("=" * 80)
-
-
 if __name__ == "__main__":
     # Run without pytest
     print("Testing mla_decode_fwd_grouped with saved tensors...")
-    
-    try:
-        test_analyze_kv_indices()
-    except Exception as e:
-        print(f"Analysis failed: {e}")
-    
     try:
         test_mla_decode_fwd_grouped_with_saved_tensors()
     except Exception as e:
