@@ -285,12 +285,14 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
             # Reshape q to [batch, num_heads, head_size]
             q_reshaped = q.view(B, self.num_heads, -1)
             from aiter import dtypes
+            q_reshaped_fp8 = q_reshaped.to(dtypes.fp8)
+            kv_buffer_fp8 = kv_buffer.to(dtypes.fp8)
 
             # Save tensors when kv_indptr[1] == 8 (only once, only on rank 0)
             rocm_aiter_ops.mla_decode_fwd_grouped(
-                q=q_reshaped,
-                k_buffer=kv_buffer,
-                v_buffer=kv_buffer,
+                q=q_reshaped_fp8,
+                k_buffer=kv_buffer_fp8,
+                v_buffer=kv_buffer_fp8,
                 o=o,
                 kv_indptr=attn_metadata.decode.paged_kv_indptr,
                 block_tables=attn_metadata.decode.block_table,
