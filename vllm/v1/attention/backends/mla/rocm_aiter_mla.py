@@ -19,7 +19,7 @@ from vllm.v1.attention.backends.mla.common import (
 )
 from vllm.v1.attention.backends.utils import AttentionCGSupport
 from vllm.v1.kv_cache_interface import AttentionSpec
-
+from aiter import dtypes
 
 class AiterMLABackend(MLACommonBackend):
     supported_kernel_block_sizes: ClassVar[list[int | MultipleOf]] = [1, 64]
@@ -252,13 +252,6 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
         
         # For num_heads == 8, use decode_attention_fwd_grouped interface
         if self.num_heads == 8:
-            # MLA KV cache shape: [num_blocks, block_size, head_size]
-            # where head_size = kv_lora_rank + qk_rope_head_dim (e.g., 576 = 512 + 64)
-            # Target: [num_blocks, block_size, 1, head_size] to add num_kv_heads dim
-            num_blocks = kv_c_and_k_pe_cache.shape[0]
-            block_size = kv_c_and_k_pe_cache.shape[1]
-            head_size = kv_c_and_k_pe_cache.shape[2]
-            
             # Add num_kv_heads dimension (1 for MLA)
             kv_buffer = kv_c_and_k_pe_cache.unsqueeze(2)  # [num_blocks, block_size, 1, head_size]
 
@@ -284,15 +277,13 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
 
             # Reshape q to [batch, num_heads, head_size]
             q_reshaped = q.view(B, self.num_heads, -1)
-            from aiter import dtypes
+            
             q_reshaped_fp8 = q_reshaped.to(dtypes.fp8)
-            kv_buffer_fp8 = kv_buffer.to(dtypes.fp8)
-
             # Save tensors when kv_indptr[1] == 8 (only once, only on rank 0)
             rocm_aiter_ops.mla_decode_fwd_grouped(
                 q=q_reshaped_fp8,
-                k_buffer=kv_buffer_fp8,
-                v_buffer=kv_buffer_fp8,
+                k_buffer=kv_buffer,
+                v_buffer=kv_buffer,
                 o=o,
                 kv_indptr=attn_metadata.decode.paged_kv_indptr,
                 block_tables=attn_metadata.decode.block_table,
@@ -304,7 +295,6 @@ class AiterMLAImpl(MLACommonImpl[AiterMLAMetadata]):
                 logit_cap=0.0,
                 mtp=max_seqlen_qo - 1,
             )
-            torch.cuda.synchronize()
         else:
             # For num_heads == 16 or 128, use the original mla_decode_fwd
             kv_buffer = kv_c_and_k_pe_cache.unsqueeze(2)

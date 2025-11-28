@@ -155,17 +155,6 @@ class TritonMLAImpl(MLACommonImpl[MLACommonMetadata]):
         PAGE_SIZE = kv_c_and_k_pe_cache.size(1)
 
         # Run MQA
-        
-        if parallel_state.get_world_group().is_first_rank:
-            logger.info(f"=== kv_c_and_k_pe_cache shape debug ===")
-            logger.info(f"kv_c_and_k_pe_cache.shape: {kv_c_and_k_pe_cache.shape}, dtype: {kv_c_and_k_pe_cache.dtype}")
-            logger.info(f"kv_c_cache.shape: {kv_c_cache.shape}, dtype: {kv_c_cache.dtype}")
-            logger.info(f"PAGE_SIZE: {PAGE_SIZE}")
-            logger.info(f"block_table.shape: {attn_metadata.decode.block_table.shape}, dtype: {attn_metadata.decode.block_table.dtype}")
-            logger.info(f"block_table: {attn_metadata.decode.block_table}")
-            logger.info(f"seq_lens.shape: {attn_metadata.decode.seq_lens.shape}, dtype: {attn_metadata.decode.seq_lens.dtype}")
-            logger.info(f"seq_lens: {attn_metadata.decode.seq_lens}")
-
         decode_attention_fwd(
             q,
             kv_c_and_k_pe_cache,
