@@ -796,7 +796,8 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
                 max_context_chunk = (
                     self.chunked_prefill_workspace_size // num_prefills_with_context_cpu
                 )
-
+                logger.info(f"max_context_chunk: {max_context_chunk}")
+                logger.info(f"self.aot_schedule: {self.aot_schedule}")
                 if self.aot_schedule:
                     # align max_context_chunk to page_size by rounding down,
                     # currently the `gather_and_maybe_dequant_cache` kernel
@@ -813,12 +814,15 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
                 #  [[0, 0, 0, 0], [256, 256, 256, 256], [512, 512, 512, 512]]
                 # Note(simon): this is done in CPU because of downstream's
                 # of `to_list`.
+                # 显式指定 device='cpu' 以确保在 CPU 上创建
+                # （在某些配置下，torch.arange 可能会在 GPU 上创建 tensor）
                 chunk_starts = (
-                    torch.arange(num_chunks, dtype=torch.int32)
+                    torch.arange(num_chunks, dtype=torch.int32, device='cpu')
                     .unsqueeze(1)
                     .expand(-1, num_prefills)
                     * max_context_chunk
                 )
+
                 chunk_ends = torch.min(
                     context_lens_cpu.unsqueeze(0), chunk_starts + max_context_chunk
                 )

@@ -326,6 +326,123 @@ def _rocm_aiter_mla_decode_fwd_fake(
     pass
 
 
+def _ref_masked_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    scale: float,
+    dtype: torch.dtype,
+    is_causal: bool = True,
+    is_fp8: bool = False,
+    q_scale: float = 1.0,
+    kv_scale: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """PyTorch reference implementation of masked attention.
+    
+    This is a self-contained reference implementation that doesn't depend on
+    external modules or global device settings.
+    """
+    if is_fp8:
+        scale *= q_scale * kv_scale
+
+    attn_weights = torch.einsum("qhd,khd->hqk", query.float(), key.float()) * scale
+    
+    if is_causal:
+        s_q = query.shape[0]
+        s_k = key.shape[0]
+        attn_bias = torch.zeros(s_q, s_k, dtype=query.dtype, device=query.device)
+        temp_mask = torch.ones(s_q, s_k, dtype=torch.bool, device=query.device).tril(diagonal=s_k - s_q)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        attn_bias.to(query.dtype)
+        attn_weights += attn_bias
+
+    lse = attn_weights.logsumexp(dim=-1)
+    m = attn_weights.max(-1).values
+    attn_weights_exp = torch.exp(attn_weights - m.unsqueeze(-1))
+    l = attn_weights_exp.sum(-1)
+
+    if is_fp8:
+        attn_weights_fp8 = attn_weights_exp.to(torch.float8_e4m3fnuz)
+        attn_weights_exp = attn_weights_fp8.to(torch.float)
+
+    out = torch.einsum("hqk,khd->qhd", attn_weights_exp.float(), value.float())
+    out = out / l.transpose(0,1).unsqueeze(-1)
+    
+    if is_fp8:
+        out *= kv_scale
+    return out.to(dtype), lse
+
+
+def _torch_mla_extend(
+    q: torch.Tensor,
+    kvc_cache: torch.Tensor,
+    qo_indptr: torch.Tensor,
+    kv_indptr: torch.Tensor,
+    kv_indices: torch.Tensor,
+    sm_scale: float,
+    kv_lora_rank: int,
+    qk_rope_head_dim: int,
+    dtype: torch.dtype,
+    is_causal: bool = True,
+    q_scale: float = 1.0,
+    kv_scale: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """PyTorch reference implementation of MLA attention extension.
+    
+    This is a self-contained implementation that:
+    - Doesn't depend on external modules or global device settings
+    - Works with tensors on any device (CPU or CUDA)
+    - All operations preserve the device of input tensors
+    
+    Args:
+        q: Query tensor [total_q, nheads, headdim_q]
+        kvc_cache: KV cache [num_page * page_size, nhead_kv, qk_head_dim]
+        qo_indptr: Query output index pointers
+        kv_indptr: KV index pointers
+        kv_indices: KV indices
+        sm_scale: Softmax scale
+        kv_lora_rank: KV LoRA rank
+        qk_rope_head_dim: QK RoPE head dimension
+        dtype: Output dtype
+        is_causal: Whether to use causal masking
+        q_scale: Query scale for FP8
+        kv_scale: KV scale for FP8
+    
+    Returns:
+        Tuple of (output, log-sum-exp)
+    """
+    is_fp8 = q.dtype == torch.float8_e4m3fnuz
+
+    if is_fp8:
+        q = q.to(torch.float)
+        kvc_cache = kvc_cache.to(torch.float)
+
+    qs = torch.tensor_split(q, qo_indptr.tolist()[1:])
+    kvc = torch.index_select(kvc_cache, 0, kv_indices)
+    kvs = torch.tensor_split(kvc, kv_indptr.tolist()[1:])
+    bs = qo_indptr.shape[0] - 1
+
+    os = []
+    lses = []
+    for i in range(bs):
+        kvc = kvs[i]
+        q = qs[i]
+        k = kvc
+        v, _ = torch.split(kvc, [kv_lora_rank, qk_rope_head_dim], dim=-1)
+        o, lse = _ref_masked_attention(
+            q, k, v, sm_scale, dtype,
+            is_causal=is_causal,
+            is_fp8=is_fp8,
+            q_scale=q_scale,
+            kv_scale=kv_scale
+        )
+        os.append(o)
+        lses.append(lse)
+    o = torch.concat(os)
+    lse = torch.concat(lses).transpose(0, 1)
+    return o, lse
+
+
 def _rocm_aiter_mla_decode_fwd_grouped_impl(
     q: torch.Tensor,
     k_buffer: torch.Tensor,
@@ -341,21 +458,17 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
     logit_cap: float = 0.0,
     mtp: int = 0,
 ) -> None:
+    """ROCm AITER MLA decode forward grouped implementation.
+    
+    When VLLM_MLA_USE_TORCH_REF=1, uses local PyTorch reference implementation.
+    Otherwise uses Triton/ROCm kernel.
+    """
     import os
     use_torch_ref = os.environ.get('VLLM_MLA_USE_TORCH_REF', '0') == '1'
     
     if use_torch_ref:
-
-        import sys
-        sys.path.insert(0, '/home/yajizhan/code/aiter/op_tests/op_benchmarks/triton')
-        try:
-            from bench_mla_decode_without_rope import torch_mla_extend
-        except ImportError:
-            print("[MLA Debug] Failed to import torch_mla_extend, falling back to Triton", flush=True)
-            use_torch_ref = False
-    
-    if use_torch_ref:
-        # Prepare inputs for torch_mla_extend
+        # Use local PyTorch reference implementation
+        # No external imports needed - everything is self-contained
         batch_size = q.shape[0]
         num_heads = q.shape[1]
         head_dim = q.shape[2]
@@ -396,9 +509,10 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
                 kv_indices_list.append(expanded_indices[:seq_len_i])
         
         kv_indices = torch.cat(kv_indices_list)
-        # Call torch_mla_extend
+        
+        # Call local reference implementation
         # Note: is_causal=False for decode (single query token attending to all KV)
-        o_ref, lse_ref = torch_mla_extend(
+        o_ref, lse_ref = _torch_mla_extend(
             q=q,  # [batch, num_heads, head_dim]
             kvc_cache=k_buffer.reshape(-1, 1, 576),  # [num_blocks * block_size, num_kv_heads, head_dim]
             qo_indptr=qo_indptr,
@@ -410,8 +524,7 @@ def _rocm_aiter_mla_decode_fwd_grouped_impl(
             dtype=torch.bfloat16,
             is_causal=False,  # Decode: 1 query token can attend to all KV tokens
         )
-        
-        # Copy results
+
         o.copy_(o_ref)
 
     else:
